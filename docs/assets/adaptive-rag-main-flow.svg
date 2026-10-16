@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1600" height="1380" viewBox="0 0 1600 1380">
+<defs><marker id="a" markerWidth="10" markerHeight="10" refX="8" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="none" stroke="#64748b" stroke-width="1.5"/></marker><style>text{font-family:'Microsoft YaHei','Noto Sans CJK SC',sans-serif;fill:#183153} .h{font-size:27px;font-weight:700}.t{font-size:21px}.s{font-size:18px;fill:#52657c}.box{fill:white;stroke:#cbd5e1;stroke-width:2;rx:16}.line{fill:none;stroke:#64748b;stroke-width:2;marker-end:url(#a)}.green{fill:#e9faf4;stroke:#76cbb0}.purple{fill:#f1edff;stroke:#ae9be8}.red{fill:#fff0ed;stroke:#edab9b}</style></defs>
+<rect width="1600" height="1380" fill="#f6f8fc"/>
+<text x="65" y="65" font-size="40" font-weight="700">Adaptive-RAG 电商客服 · 主要链路</text>
+<text x="65" y="105" class="t">先判断问题 → 选择检索或工具 → 基于证据回答</text>
+<rect x="45" y="135" width="1510" height="195" rx="22" fill="#e9f2ff"/>
+<text x="70" y="175" class="h">① 知识准备 · 启动时构建</text>
+<rect x="75" y="202" width="220" height="80" class="box"/><text x="110" y="238" class="t">▤ 政策知识文件</text><text x="110" y="266" class="s">knowledge/</text>
+<path d="M295 242H350" class="line"/>
+<rect x="355" y="202" width="360" height="80" class="box"/><text x="382" y="237" class="t">解析 → 清洗 → 切块 → 去重</text><text x="382" y="266" class="s">同一批 chunk 构建两类索引</text>
+<path d="M715 242H780" class="line"/>
+<rect x="785" y="202" width="325" height="80" class="box green"/><text x="815" y="237" class="t">BM25 关键词索引</text><text x="815" y="266" class="s">词面匹配 · 进程内</text>
+<rect x="1130" y="202" width="385" height="80" class="box green"/><text x="1160" y="237" class="t">Embedding → 向量库</text><text x="1160" y="266" class="s">语义匹配 · 内存 / Qdrant</text>
+<text x="70" y="380" class="h">② 在线请求 · LangGraph 状态图编排</text>
+<rect x="65" y="405" width="280" height="82" class="box"/><text x="90" y="438" class="t">◉ 用户 → FastAPI</text><text x="90" y="468" class="s">ChatService · 限流 · 读历史</text>
+<path d="M345 446H395" class="line"/>
+<rect x="400" y="405" width="270" height="82" class="box red"/><text x="430" y="438" class="t">◇ 安全护栏</text><text x="430" y="468" class="s">提示注入 / 业务边界</text>
+<path d="M670 446H720" class="line"/>
+<rect x="725" y="405" width="280" height="82" class="box"/><text x="755" y="438" class="t">意图识别 → 路由</text><text x="755" y="468" class="s">LLM 分类 · 失败时规则兜底</text>
+<path d="M1005 446H1235V530H180V555" class="line"/>
+<path d="M450 530V555" class="line"/><path d="M767 530V555" class="line"/><path d="M1117 530V555" class="line"/><path d="M1235 530H1420V555" class="line"/>
+<path d="M535 487V505H1410V550" class="line"/><text x="1100" y="497" class="s">护栏拒绝</text>
+<rect x="65" y="555" width="230" height="255" class="box"/><text x="90" y="593" class="h">DIRECT</text><text x="90" y="631" class="t">问候 / 闲聊</text><text x="90" y="676" class="t">↓ 直接生成</text><text x="90" y="774" class="s">无需知识检索</text>
+<rect x="320" y="555" width="260" height="255" class="box green"/><text x="345" y="593" class="h">SINGLE</text><text x="345" y="631" class="t">单条政策问题</text><text x="345" y="676" class="t">改写 → Hybrid</text><text x="345" y="714" class="t">↓ 精排</text><text x="345" y="774" class="s">使用第一条改写查询</text>
+<rect x="605" y="555" width="325" height="255" class="box green"/><text x="630" y="593" class="h">MULTI</text><text x="630" y="631" class="t">复合条件 / 多轮补证</text><text x="630" y="676" class="t">改写 → Hybrid → 精排</text><text x="630" y="714" class="t">↓ 证据充分性检查</text><text x="630" y="751" class="t">↻ 不足则补充缺失方面</text><text x="630" y="785" class="s">内部循环 · 默认最多 3 轮</text>
+<rect x="955" y="555" width="325" height="255" class="box purple"/><text x="980" y="593" class="h">AGENT</text><text x="980" y="631" class="t">订单 / 物流 / 售后</text><text x="980" y="676" class="t">Planner → 工具执行</text><text x="980" y="714" class="s">读工具：查询 / 失败降级</text><text x="980" y="750" class="s">写操作：先返回待确认动作</text><text x="980" y="785" class="s">新请求携带确认 ID · 幂等</text>
+<rect x="1305" y="555" width="230" height="255" class="box red"/><text x="1330" y="593" class="h">REFUSE</text><text x="1330" y="631" class="t">越界 / 注入</text><text x="1330" y="676" class="t">↓ 明确拒答</text><text x="1330" y="774" class="s">直接进入记忆节点</text>
+<text x="330" y="845" class="s">Hybrid：BM25 + 向量 → RRF 融合；随后 Cross-Encoder 精排</text>
+<path d="M180 810V875H785" class="line"/><path d="M450 810V875" class="line"/><path d="M767 810V875" class="line"/><path d="M1117 810V875H800V905" class="line"/>
+<rect x="65" y="905" width="1470" height="155" class="box"/>
+<text x="95" y="945" class="h">基于证据生成 → 忠实度检查 → 记忆压缩 → 保存会话 → JSON / SSE</text>
+<text x="95" y="986" class="t">忠实度不足：改写一次 → 复检 → 摘录兜底；待确认或已拒答时跳过检查</text>
+<text x="95" y="1025" class="s">REFUSE 直接到记忆压缩；MULTI 检查证据充分性，忠实度节点检查生成答案是否有依据</text>
+<path d="M1420 810V889H1500V905" class="line"/>
+<text x="65" y="1110" class="h">③ 阅读代码时要区分：已有流程与尚未闭环的能力</text>
+<rect x="65" y="1135" width="465" height="135" class="box"/><text x="90" y="1173" class="t">▤ 记忆回注尚未打通</text><text x="90" y="1209" class="s">历史会保存，但未进入生成提示词</text><text x="90" y="1242" class="s">压缩位于本轮生成之后</text>
+<rect x="550" y="1135" width="495" height="135" class="box purple"/><text x="575" y="1173" class="t">◇ 确认授权需要完善</text><text x="575" y="1209" class="s">确认 ID 尚未持久化绑定原提案</text><text x="575" y="1242" class="s">生产化需校验用户、参数和有效期</text>
+<rect x="1065" y="1135" width="470" height="135" class="box red"/><text x="1090" y="1173" class="t">◉ 检查并非强制闭环</text><text x="1090" y="1209" class="s">检查器不可用时会放行</text><text x="1090" y="1242" class="s">最终复检失败没有强制拒答分支</text>
+<text x="65" y="1318" class="s">核心源码：agents/graph.py · retrieval/self_rag.py · agents/nodes/executor.py · services/chat_service.py</text>
+<text x="65" y="1350" class="s">基于当前源码静态分析 · 未重新运行评测 · 订单与物流为演示种子数据</text>
+</svg>
