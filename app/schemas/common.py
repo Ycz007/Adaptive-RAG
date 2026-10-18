@@ -21,6 +21,9 @@ class TokenUsage(BaseModel):
 
 
 class LatencyBreakdown(BaseModel):
+    """
+    计算一次请求总耗时
+    """
     intent_ms: float = 0.0
     routing_ms: float = 0.0
     retrieval_ms: float = 0.0

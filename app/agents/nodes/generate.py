@@ -8,10 +8,8 @@ import time
 from pydantic import BaseModel, Field
 
 from app.agents.state import AgentState
-from app.core.enums import RetrievalStrategy
 from app.core.exceptions import LLMOutputError, LLMProviderError
 from app.core.streaming import get_token_sink
-from app.prompts.answer import ANSWER_SYSTEM, ANSWER_USER
 from app.providers.base import LLMProvider, LLMResponse
 from app.providers.json_parser import parse_model
 from app.schemas.common import LatencyBreakdown, TokenUsage
@@ -43,21 +41,7 @@ async def generate_node(state: AgentState, llm: LLMProvider) -> dict:
         "\n\n".join(f"[{c.chunk_id}] {c.title}\n{c.content}" for c in chunks[:6]) or "(无检索结果)"
     )
     tool_text = json.dumps([t.model_dump() for t in tools], ensure_ascii=False) if tools else "(无)"
-    intent = state.get("intent")
-    strategy = state.get("strategy") or RetrievalStrategy.DIRECT
-    messages = [
-        {"role": "system", "content": ANSWER_SYSTEM},
-        {
-            "role": "user",
-            "content": ANSWER_USER.format(
-                query=state["user_query"],
-                intent=intent.label.value if intent else "unknown",
-                strategy=strategy.value,
-                evidence=evidence,
-                tool_results=tool_text,
-            ),
-        },
-    ]
+    messages = state["answer_messages"]
     try:
         response = await _generate_or_stream(llm, messages)
         payload = parse_model(response.content, AnswerPayload)

@@ -23,7 +23,7 @@ from app.providers.base import LLMProvider
 from app.repositories.session_repository import SessionRepository
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.reranker import DocumentReranker
-from app.schemas.chat import ChatRequest, ChatResponse
+from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
 from app.schemas.common import LatencyBreakdown, TokenUsage
 from app.tools.factory import build_tool_registry
 from app.tools.registry import ToolRegistry
@@ -66,7 +66,13 @@ class ChatService:
             state = await self._initial_state(db, request, session_id, trace_id)
             result = await self._invoke(state)
             response = self._to_response(result, session_id=session_id, trace_id=trace_id)
-            await self._persist(db, request, response, summary=result.get("summary") or "")
+            await self._persist(
+                db,
+                request,
+                response,
+                summary=result.get("summary") or "",
+                summary_until_message_id=result.get("summary_until_message_id") or 0,
+            )
             await db.commit()
         self._observe(response, started)
         return response
@@ -138,7 +144,13 @@ class ChatService:
                 raise holder["error"]
             merged: AgentState = holder["merged"]
             response = self._to_response(merged, session_id=session_id, trace_id=trace_id)
-            await self._persist(db, request, response, summary=merged.get("summary") or "")
+            await self._persist(
+                db,
+                request,
+                response,
+                summary=merged.get("summary") or "",
+                summary_until_message_id=merged.get("summary_until_message_id") or 0,
+            )
             await db.commit()
         self._observe(response, started)
         yield {"event": "answer", "data": response.model_dump(mode="json")}
@@ -149,6 +161,12 @@ class ChatService:
         if not allowed:
             raise RateLimitError()
 
+    async def validate_session(self, request: ChatRequest) -> None:
+        """Check ownership before a streaming response sends HTTP headers."""
+        if request.session_id:
+            async with self._session_factory() as db:
+                await SessionRepository(db).check_owner(request.session_id, request.user_id)
+
     async def _initial_state(
         self,
         db: AsyncSession,
@@ -157,15 +175,18 @@ class ChatService:
         trace_id: str,
     ) -> AgentState:
         sessions = SessionRepository(db)
-        await sessions.get_or_create(session_id, request.user_id)
-        history = await sessions.recent_messages(session_id)
+        session = await sessions.get_or_create(session_id, request.user_id)
+        rows = await sessions.messages_after(session_id, session.summary_until_message_id)
         return {
             "trace_id": trace_id,
             "session_id": session_id,
             "user_id": request.user_id,
             "user_query": request.message,
-            "messages": history,
-            "summary": "",
+            "messages": [ChatMessage(role=row.role, content=row.content) for row in rows],  # type: ignore[arg-type]
+            "message_ids": [row.id for row in rows],
+            # Legacy summaries have no coverage cursor: rebuild from the full raw history.
+            "summary": session.summary if session.summary_until_message_id else "",
+            "summary_until_message_id": session.summary_until_message_id,
             "retrieved_chunks": [],
             "tool_results": [],
             "citations": [],
@@ -198,12 +219,15 @@ class ChatService:
         response: ChatResponse,
         *,
         summary: str = "",
+        summary_until_message_id: int = 0,
     ) -> None:
         sessions = SessionRepository(db)
         await sessions.append_message(response.session_id, "user", request.message)
         await sessions.append_message(response.session_id, "assistant", response.answer)
         if summary:
-            await sessions.save_summary(response.session_id, summary)
+            await sessions.save_summary(
+                response.session_id, summary, until_message_id=summary_until_message_id
+            )
 
     def _to_response(
         self,

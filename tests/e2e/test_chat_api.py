@@ -1,5 +1,6 @@
 import json
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.config.settings import clear_settings_cache
@@ -76,3 +77,19 @@ def test_admin_tools_open_in_testing() -> None:
         assert "get_order" in body["tools"]
         assert "mcp_store_hours" in body["tools"]
         assert "mcp_warehouse_cutoff" in body["tools"]
+
+
+@pytest.mark.parametrize("endpoint", ["/api/v1/chat", "/api/v1/chat/stream"])
+def test_session_ownership_is_checked_before_response_headers(endpoint) -> None:
+    with _client() as client:
+        first = client.post("/api/v1/chat", json={"message": "你好", "user_id": "owner"})
+        response = client.post(
+            endpoint,
+            json={
+                "message": "继续",
+                "user_id": "other",
+                "session_id": first.json()["session_id"],
+            },
+        )
+        assert response.status_code == 403
+        assert response.json()["error_code"] == "TOOL_PERMISSION_DENIED"

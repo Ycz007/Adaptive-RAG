@@ -28,6 +28,7 @@ class FaithfulnessChecker:
         answer: str,
         chunks: list[RetrievedChunk],
         tool_results_text: str,
+        conversation_text: str = "",
     ) -> FaithfulnessResult:
         evidence = "\n".join(f"[{c.chunk_id}] {c.content}" for c in chunks[:8]) or "(none)"
         try:
@@ -41,6 +42,7 @@ class FaithfulnessChecker:
                             answer=answer,
                             evidence=evidence,
                             tool_results=tool_results_text or "(none)",
+                            conversation=conversation_text or "(none)",
                         ),
                     },
                 ],

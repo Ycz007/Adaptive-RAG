@@ -33,7 +33,7 @@ from app.tools.registry import ToolRegistry
 def _route_after_complexity(state: AgentState) -> str:
     strategy = state.get("strategy") or RetrievalStrategy.SINGLE
     mapping = {
-        RetrievalStrategy.DIRECT: "generate_answer",
+        RetrievalStrategy.DIRECT: "compact_memory",
         RetrievalStrategy.REFUSE: "refuse_answer",
         RetrievalStrategy.SINGLE: "retrieve_docs",
         RetrievalStrategy.MULTI: "retrieve_docs",
@@ -50,13 +50,13 @@ def build_graph(
     reranker: DocumentReranker,
     registry: ToolRegistry,
 ) -> CompiledStateGraph:
-    classifier = IntentClassifier(llm)
-    adaptive = AdaptiveRouter(llm)
-    rewriter = QueryRewriter(llm)
-    self_rag = SelfRAGLoop(retriever, reranker, rewriter, llm, settings)
-    planner = Planner(llm, registry)
-    checker = FaithfulnessChecker(llm)
-    summarizer = ConversationSummarizer(llm)
+    classifier = IntentClassifier(llm)  # 意图分类器
+    adaptive = AdaptiveRouter(llm)  # 自适应路由器（判断复杂度）
+    rewriter = QueryRewriter(llm)  # 查询改写器
+    self_rag = SelfRAGLoop(retriever, reranker, rewriter, llm, settings)  # Self-RAG 自反思检索循环
+    planner = Planner(llm, registry, settings=settings)  # 任务规划器
+    checker = FaithfulnessChecker(llm)  # 忠诚度检查器（防幻觉）
+    summarizer = ConversationSummarizer(llm)  # 对话摘要器
 
     graph = StateGraph(AgentState)
     graph.add_node("apply_guardrail", guardrail_node)
@@ -79,32 +79,34 @@ def build_graph(
     graph.add_node("refuse_answer", refuse_node)
     graph.add_node("check_faithfulness", partial(faithfulness_node, checker=checker, llm=llm))
     graph.add_node("compact_memory", partial(memory_node, settings=settings, summarizer=summarizer))
+    graph.add_node("prepare_memory", partial(memory_node, settings=settings, summarizer=summarizer))
 
     def _after_guardrail(state: AgentState) -> str:
-        return "refuse_answer" if state.get("refused") else "classify_intent"
+        return "refuse_answer" if state.get("refused") else "prepare_memory"
 
     graph.add_edge(START, "apply_guardrail")
     graph.add_conditional_edges(
         "apply_guardrail",
         _after_guardrail,
-        {"refuse_answer": "refuse_answer", "classify_intent": "classify_intent"},
+        {"refuse_answer": "refuse_answer", "prepare_memory": "prepare_memory"},
     )
+    graph.add_edge("prepare_memory", "classify_intent")
     graph.add_edge("classify_intent", "route_complexity")
     graph.add_conditional_edges(
         "route_complexity",
         _route_after_complexity,
         {
-            "generate_answer": "generate_answer",
+            "compact_memory": "compact_memory",
             "refuse_answer": "refuse_answer",
             "retrieve_docs": "retrieve_docs",
             "plan_tasks": "plan_tasks",
         },
     )
-    graph.add_edge("retrieve_docs", "generate_answer")
+    graph.add_edge("retrieve_docs", "compact_memory")
     graph.add_edge("plan_tasks", "execute_tools")
-    graph.add_edge("execute_tools", "generate_answer")
+    graph.add_edge("execute_tools", "compact_memory")
+    graph.add_edge("compact_memory", "generate_answer")
     graph.add_edge("generate_answer", "check_faithfulness")
-    graph.add_edge("refuse_answer", "compact_memory")
-    graph.add_edge("check_faithfulness", "compact_memory")
-    graph.add_edge("compact_memory", END)
+    graph.add_edge("refuse_answer", END)
+    graph.add_edge("check_faithfulness", END)
     return graph.compile()

@@ -28,6 +28,7 @@ async def chat_stream(
     container: AppContainer = Depends(get_container),
 ) -> EventSourceResponse:
     """Answer one turn as an SSE stream of node, token and answer events."""
+    await container.chat_service.validate_session(payload)
 
     async def events():
         async for item in container.chat_service.stream(payload, trace_id=request.state.trace_id):

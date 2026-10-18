@@ -6,6 +6,7 @@ from app.agents.nodes.generate import AnswerPayload, _extractive_fallback
 from app.agents.state import AgentState
 from app.core.exceptions import LLMOutputError, LLMProviderError
 from app.guardrails.hallucination import FaithfulnessChecker, FaithfulnessResult
+from app.memory.context_builder import history_messages
 from app.observability.metrics import HALLUCINATION_FLAGS
 from app.prompts.faithfulness import SELF_CORRECT_SYSTEM, SELF_CORRECT_USER
 from app.providers.base import LLMProvider
@@ -22,6 +23,7 @@ async def self_correct_answer(
     chunks: list[RetrievedChunk],
     tool_results_text: str,
     first_result: FaithfulnessResult,
+    conversation_text: str = "",
 ) -> tuple[str, FaithfulnessResult, bool]:
     """LLM rewrite once, then extractive fallback. Returns (answer, judge, corrected)."""
     evidence = (
@@ -40,6 +42,7 @@ async def self_correct_answer(
                         or ",".join(first_result.hallucinated_spans),
                         evidence=evidence,
                         tool_results=tool_results_text or "(无)",
+                        conversation=conversation_text or "(无)",
                     ),
                 },
             ],
@@ -53,6 +56,7 @@ async def self_correct_answer(
             answer=rewritten,
             chunks=chunks,
             tool_results_text=tool_results_text,
+            conversation_text=conversation_text,
         )
         if judged.supported:
             return rewritten, judged, True
@@ -64,6 +68,7 @@ async def self_correct_answer(
         answer=patched,
         chunks=chunks,
         tool_results_text=tool_results_text,
+        conversation_text=conversation_text,
     )
     return patched, judged, True
 
@@ -77,11 +82,16 @@ async def faithfulness_node(
     chunks = state.get("retrieved_chunks") or []
     tools = state.get("tool_results") or []
     tool_text = str([t.model_dump() for t in tools])
+    conversation_text = "\n".join(
+        f"{message['role']}: {message['content']}"
+        for message in history_messages(state.get("summary") or "", state.get("messages") or [])
+    )
     result = await checker.check(
         query=state["user_query"],
         answer=answer,
         chunks=chunks,
         tool_results_text=tool_text,
+        conversation_text=conversation_text,
     )
     extra = {"faithfulness": result.model_dump(), "self_corrected": False}
     if result.supported:
@@ -95,6 +105,7 @@ async def faithfulness_node(
         chunks=chunks,
         tool_results_text=tool_text,
         first_result=result,
+        conversation_text=conversation_text,
     )
     extra = {"faithfulness": judged.model_dump(), "self_corrected": corrected}
     return {"final_answer": patched, "extra": extra}

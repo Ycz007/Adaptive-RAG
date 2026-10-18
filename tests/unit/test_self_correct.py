@@ -10,12 +10,14 @@ from app.schemas.retrieval import RetrievedChunk
 class _SequenceLLM:
     def __init__(self) -> None:
         self.calls = 0
+        self.prompts = []
 
     async def ping(self) -> bool:
         return True
 
     async def generate(self, messages, **kwargs) -> LLMResponse:
         self.calls += 1
+        self.prompts.append(messages)
         if self.calls == 1:
             content = '{"answer":"七天无理由不含定制","citation_chunk_ids":[]}'
         else:
@@ -49,7 +51,9 @@ async def test_self_correct_rewrites_unsupported_answer() -> None:
         chunks=[chunk],
         tool_results_text="",
         first_result=first,
+        conversation_text="用户此前提供订单 ORD10001",
     )
     assert corrected is True
     assert judged.supported is True
     assert "定制" in answer
+    assert all("用户此前提供订单 ORD10001" in prompt[-1]["content"] for prompt in llm.prompts)

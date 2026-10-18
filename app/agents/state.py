@@ -21,7 +21,10 @@ class AgentState(TypedDict, total=False):
     user_id: str
     user_query: str
     messages: list[ChatMessage]
+    message_ids: list[int]
     summary: str
+    summary_until_message_id: int
+    answer_messages: list[dict[str, str]]
     intent: IntentResult | None
     complexity: ComplexityResult | None
     strategy: RetrievalStrategy | None

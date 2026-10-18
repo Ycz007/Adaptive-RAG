@@ -3,6 +3,7 @@
 from collections.abc import AsyncIterator
 from pathlib import Path
 
+from sqlalchemy import inspect, text
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -42,6 +43,17 @@ def create_session_factory(engine: AsyncEngine) -> async_sessionmaker[AsyncSessi
 async def init_schema(engine: AsyncEngine) -> None:
     async with engine.begin() as connection:
         await connection.run_sync(Base.metadata.create_all)
+        # Local SQLite starts via create_all rather than Alembic; upgrade existing files too.
+        if engine.dialect.name == "sqlite":
+            columns = await connection.run_sync(
+                lambda conn: {column["name"] for column in inspect(conn).get_columns("sessions")}
+            )
+            if "summary_until_message_id" not in columns:
+                await connection.execute(
+                    text(
+                        "ALTER TABLE sessions ADD COLUMN summary_until_message_id INTEGER NOT NULL DEFAULT 0"
+                    )
+                )
 
 
 async def session_scope(

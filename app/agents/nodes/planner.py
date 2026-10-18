@@ -5,8 +5,11 @@ from __future__ import annotations
 import re
 
 from app.agents.state import AgentState
+from app.config.settings import Settings
 from app.core.exceptions import LLMOutputError, LLMProviderError
 from app.core.ids import new_id
+from app.memory.context_builder import ContextBuilder
+from app.memory.summarizer import ConversationSummarizer
 from app.prompts.planner import PLANNER_SYSTEM, PLANNER_USER
 from app.providers.base import LLMProvider
 from app.providers.json_parser import parse_model
@@ -21,9 +24,12 @@ _ALWAYS_AVAILABLE = ("search_knowledge", "escalate_to_human")
 
 
 class Planner:
-    def __init__(self, llm: LLMProvider, registry: ToolRegistry) -> None:
+    def __init__(
+        self, llm: LLMProvider, registry: ToolRegistry, *, settings: Settings | None = None
+    ) -> None:
         self._llm = llm
         self._registry = registry
+        self.context = ContextBuilder(settings or Settings(), ConversationSummarizer(llm))
 
     def _tool_catalog(self, allowed: set[str] | None = None) -> str:
         lines = []
@@ -33,26 +39,22 @@ class Planner:
             lines.append(f"- {tool.name}: {tool.description} [{tool.risk.value}]")
         return "\n".join(lines) or "- (no tools)"
 
-    async def create_plan(self, query: str, intent_label: str, summary: str) -> AgentPlan:
+    async def create_plan(
+        self, query: str, intent_label: str, summary: str, *, state: AgentState | None = None
+    ) -> tuple[AgentPlan, dict]:
         skill = match_skill(query, intent_label)
         allowed = _allowed_tools(skill, self._registry)
+        context = await self.context.prepare(
+            state or {"user_query": query, "summary": summary},
+            system=PLANNER_SYSTEM.format(
+                tools=self._tool_catalog(allowed), skill_context=_format_skill(skill)
+            ),
+            current=PLANNER_USER.format(query=query, intent=intent_label, summary="见历史上下文"),
+            output_tokens=512,
+        )
         try:
             response = await self._llm.generate(
-                [
-                    {
-                        "role": "system",
-                        "content": PLANNER_SYSTEM.format(
-                            tools=self._tool_catalog(allowed),
-                            skill_context=_format_skill(skill),
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": PLANNER_USER.format(
-                            query=query, intent=intent_label, summary=summary or "无"
-                        ),
-                    },
-                ],
+                context["answer_messages"],
                 temperature=0.0,
                 max_tokens=512,
                 response_format={"type": "json_object"},
@@ -62,12 +64,35 @@ class Planner:
             if plan.steps:
                 if skill:
                     plan.rationale = f"skill:{skill['name']};{plan.rationale}"
-                return plan
+                return plan, context
         except (LLMOutputError, LLMProviderError):
             pass
+        fallback_query = query
+        # Resolve a single unambiguous order only for read-only fallback skills.
+        if (
+            skill
+            and not _ORDER_RE.search(query)
+            and all(
+                name in {"get_order", "get_order_items", "track_shipment", "search_knowledge"}
+                for name in skill.get("tools", [])
+            )
+        ):
+            found_orders = False
+            for message in reversed(context["messages"]):
+                if message.role == "user":
+                    orders = set(_ORDER_RE.findall(message.content.upper()))
+                    if orders:
+                        found_orders = True
+                        if len(orders) == 1:
+                            fallback_query += " " + orders.pop()
+                        break
+            if not found_orders:
+                orders = set(_ORDER_RE.findall(context["summary"].upper()))
+                if len(orders) == 1:
+                    fallback_query += " " + orders.pop()
         if skill:
-            return skill_to_plan(skill, query, self._registry)
-        return _knowledge_fallback(query, self._registry)
+            return skill_to_plan(skill, fallback_query, self._registry), context
+        return _knowledge_fallback(query, self._registry), context
 
 
 def _allowed_tools(skill: dict | None, registry: ToolRegistry) -> set[str] | None:
@@ -151,10 +176,11 @@ def _knowledge_fallback(query: str, registry: ToolRegistry) -> AgentPlan:
 
 async def planner_node(state: AgentState, planner: Planner) -> dict:
     intent = state.get("intent")
-    plan = await planner.create_plan(
+    plan, context = await planner.create_plan(
         state["user_query"],
         intent.label.value if intent else "faq_policy",
         state.get("summary") or "",
+        state=state,
     )
     pending = None
     for step in plan.steps:
@@ -170,4 +196,4 @@ async def planner_node(state: AgentState, planner: Planner) -> dict:
                 summary=f"即将执行 {tool.name}，需要你确认后才会真正提交。",
             )
             break
-    return {"plan": plan, "pending_action": pending}
+    return {**context, "plan": plan, "pending_action": pending}

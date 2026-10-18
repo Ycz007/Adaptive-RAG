@@ -53,7 +53,7 @@
 | FAQ 关键词客服 | 长尾政策命中差 | BM25 与向量并行召回，RRF 融合 |
 | 常规单跳 RAG | 多约束问题推不动 | 路由到 Self-RAG 多跳，改写后多路检索 |
 | 无护栏生成 | 幻觉、越权退款、提示注入 | 忠实度检查、HITL 确认、注入与边界检测 |
-| 长会话 Agent | Token 无限膨胀 | 128k 预算，50% / 70% / 85% 三级压缩 |
+| 长会话 Agent | Token 无限膨胀 | 调用前预算控制、最近 8 轮历史和可持续更新的摘要 |
 
 ## 五条检索策略
 
@@ -77,7 +77,8 @@
 flowchart TD
     Q([用户问题]) --> G["护栏：注入 / 边界检测"]
     G -->|"越界"| RF([REFUSE 拒答])
-    G --> INT["意图识别 → 复杂度评分 0.0 - 1.0"]
+    G --> PRE["加载摘要和历史，必要时增量压缩"]
+    PRE --> INT["意图识别 → 复杂度评分 0.0 - 1.0"]
     INT --> R{"自适应路由"}
     R -->|"低"| D["DIRECT 直答"]
     R -->|"中"| S["SINGLE 单跳"]
@@ -86,15 +87,16 @@ flowchart TD
     S --> HY["Hybrid 检索<br/>BM25 + 向量 → RRF 融合 → Cross-Encoder 精排"]
     M --> HY
     A --> EX["工具执行<br/>权限 / 幂等 / HITL"]
-    D --> GEN["生成"]
-    HY --> GEN
-    EX --> GEN
+    D --> MEM["调用前组装历史、摘要、证据和工具结果，检查预算"]
+    HY --> MEM
+    EX --> MEM
+    MEM --> GEN["生成"]
     GEN --> FA{"忠实度检查"}
     FA -->|"有依据"| OUT([回答 + citations])
     FA -->|"无依据"| SC["自纠错重试"]
     SC --> OUT
     SC --> RF
-    OUT --> MEM["记忆压缩"]
+    OUT --> SAVE["保存完整消息、摘要和覆盖游标"]
 ```
 
 记住这一条路径，就能自己画出整张架构图：
@@ -103,7 +105,7 @@ flowchart TD
 HTTP → ChatService → LangGraph → Retriever 或 Tool → Provider / DB
 ```
 
-Graph 一共 10 个节点（`app/agents/graph.py`）：`apply_guardrail`、`classify_intent`、`route_complexity`、`retrieve_docs`、`plan_tasks`、`execute_tools`、`generate_answer`、`refuse_answer`、`check_faithfulness`、`compact_memory`。完整的分层说明、启动降级链路与检索降级链路见[架构图与运行流程](docs/17-architecture-flow.md)。
+Graph 一共 11 个节点（`app/agents/graph.py`）：`apply_guardrail`、`prepare_memory`、`classify_intent`、`route_complexity`、`retrieve_docs`、`plan_tasks`、`execute_tools`、`compact_memory`、`generate_answer`、`refuse_answer`、`check_faithfulness`。上下文的预算、数据库迁移和行为边界见[会话上下文管理](docs/18-conversation-memory.md)。完整的分层说明、启动降级链路与检索降级链路见[架构图与运行流程](docs/17-architecture-flow.md)。
 
 ## 快速开始
 

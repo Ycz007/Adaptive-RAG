@@ -60,7 +60,8 @@ flowchart TD
 
     REQUEST --> GUARDRAIL[🛡️ Guardrail 检查]
     GUARDRAIL -->|越界 / 注入| REFUSE[🚫 拒绝或转人工]
-    GUARDRAIL -->|✅ 通过| INTENT[🏷️ 意图识别]
+    GUARDRAIL -->|✅ 通过| PRE_MEMORY[🧠 读取历史与摘要，必要时增量压缩]
+    PRE_MEMORY --> INTENT[🏷️ 意图识别]
 
     INTENT --> COMPLEXITY[🧠 复杂度分析]
     COMPLEXITY --> ROUTER[🎯 Adaptive Router]
@@ -82,7 +83,7 @@ flowchart TD
     RERANK -->|❌ 失败| LEXICAL[🔤 词法排序降级]
     CE --> CONTEXT[📚 组装上下文和 Citation]
     LEXICAL --> CONTEXT
-    CONTEXT --> GENERATE[🎨 生成回答]
+    CONTEXT --> MEMORY[🧠 调用前统一上下文预算]
 
     PLAN --> TOOL_CHECK[🔧 工具注册表和参数校验]
     TOOL_CHECK -->|查询工具| READ_TOOL[🔎 执行只读工具]
@@ -94,17 +95,18 @@ flowchart TD
     IDEMPOTENCY --> EXECUTE[⚙️ 执行业务工具]
     READ_TOOL --> TOOL_RESULT[📦 ToolResult]
     EXECUTE --> TOOL_RESULT
-    TOOL_RESULT --> GENERATE
+    TOOL_RESULT --> MEMORY
 
-    DIRECT --> GENERATE
+    DIRECT --> MEMORY
+    MEMORY --> GENERATE[🎨 生成回答]
     REFUSE --> OUTPUT
     WAIT --> OUTPUT
     GENERATE --> FAITHFUL{🧪 事实性检查}
-    FAITHFUL -->|✅ 有依据| MEMORY[🧠 压缩会话记忆]
+    FAITHFUL -->|✅ 有依据| SAVE[💾 保存消息、摘要和覆盖游标]
     FAITHFUL -->|❌ 可能幻觉| SELF_CORRECT[🔁 自纠错 / 重新生成]
-    SELF_CORRECT -->|成功| MEMORY
+    SELF_CORRECT -->|成功| SAVE
     SELF_CORRECT -->|失败| REFUSE
-    MEMORY --> OUTPUT[📤 返回答案、引用、工具状态和 metadata]
+    SAVE --> OUTPUT[📤 返回答案、引用、工具状态和 metadata]
     OUTPUT --> METRICS[📈 更新延迟、token、路由和错误指标]
     METRICS --> INPUT
 ```

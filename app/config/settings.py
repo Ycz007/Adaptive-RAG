@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import SecretStr
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     max_retrieval_hops: int = 3
 
     token_budget: int = 128_000
+    memory_recent_turns: int = Field(default=8, ge=1)
+    memory_history_token_limit: int = Field(default=12_000, ge=128)
+    context_safety_tokens: int = Field(default=512, ge=0)
     compress_soft_ratio: float = 0.50
     compress_hard_ratio: float = 0.70
     auto_compact_ratio: float = 0.85
