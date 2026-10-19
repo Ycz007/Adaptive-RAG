@@ -18,9 +18,12 @@ from app.core.ids import new_id
 from app.core.request_scope import request_session
 from app.core.streaming import reset_token_sink, set_token_sink
 from app.infra.rate_limit import RateLimiter
+from app.memory.session_cache import SessionContextCache, SessionSnapshot
 from app.observability.metrics import REQUEST_LATENCY, REQUESTS, ROUTING, STAGE_LATENCY, TOKEN_USAGE
 from app.providers.base import LLMProvider
+from app.repositories.models import SessionRow
 from app.repositories.session_repository import SessionRepository
+from app.repositories.tool_output_repository import ToolOutputRepository
 from app.retrieval.hybrid import HybridRetriever
 from app.retrieval.reranker import DocumentReranker
 from app.schemas.chat import ChatMessage, ChatRequest, ChatResponse
@@ -42,6 +45,7 @@ class ChatService:
         session_factory: async_sessionmaker[AsyncSession],
         rate_limiter: RateLimiter,
         registry: ToolRegistry | None = None,
+        session_cache: SessionContextCache | None = None,
     ) -> None:
         self._settings = settings
         self._llm = llm
@@ -49,6 +53,7 @@ class ChatService:
         self._reranker = reranker
         self._session_factory = session_factory
         self._rate_limiter = rate_limiter
+        self._session_cache = session_cache or SessionContextCache()
         self.registry = registry or build_tool_registry(retriever)
         self._graph = build_graph(
             llm=llm,
@@ -74,6 +79,7 @@ class ChatService:
                 summary_until_message_id=result.get("summary_until_message_id") or 0,
             )
             await db.commit()
+        await self._refresh_session_cache(request.user_id, session_id)
         self._observe(response, started)
         return response
 
@@ -152,6 +158,7 @@ class ChatService:
                 summary_until_message_id=merged.get("summary_until_message_id") or 0,
             )
             await db.commit()
+        await self._refresh_session_cache(request.user_id, session_id)
         self._observe(response, started)
         yield {"event": "answer", "data": response.model_dump(mode="json")}
         yield {"event": "done", "trace_id": trace_id}
@@ -176,19 +183,19 @@ class ChatService:
     ) -> AgentState:
         sessions = SessionRepository(db)
         session = await sessions.get_or_create(session_id, request.user_id)
-        rows = await sessions.messages_after(session_id, session.summary_until_message_id)
+        snapshot = await self._session_snapshot(sessions, session, use_cache=True)
         return {
             "trace_id": trace_id,
             "session_id": session_id,
             "user_id": request.user_id,
             "user_query": request.message,
-            "messages": [ChatMessage(role=row.role, content=row.content) for row in rows],  # type: ignore[arg-type]
-            "message_ids": [row.id for row in rows],
-            # Legacy summaries have no coverage cursor: rebuild from the full raw history.
-            "summary": session.summary if session.summary_until_message_id else "",
-            "summary_until_message_id": session.summary_until_message_id,
+            "messages": snapshot.messages,
+            "message_ids": snapshot.message_ids,
+            "summary": snapshot.summary,
+            "summary_until_message_id": snapshot.summary_until_message_id,
             "retrieved_chunks": [],
             "tool_results": [],
+            "tool_result_refs": await ToolOutputRepository(db).recent(request.user_id, session_id),
             "citations": [],
             "refused": False,
             "step_count": 0,
@@ -197,6 +204,54 @@ class ChatService:
             "confirm_action_id": request.confirm_action_id,
             "idempotency_key": request.idempotency_key,
         }
+
+    async def _session_snapshot(
+        self, sessions: SessionRepository, session: SessionRow, *, use_cache: bool
+    ) -> SessionSnapshot:
+        # Ownership is checked before this method. Validate the message version
+        # against the DB even on cache hits; old writers cannot resurrect old state.
+        cursor = session.summary_until_message_id
+        summary = session.summary if cursor else ""
+        latest = (
+            await sessions.latest_message_id(session.session_id)
+            if self._session_cache.enabled
+            else None
+        )
+        if use_cache and latest is not None:
+            snapshot = await self._session_cache.get(
+                user_id=session.user_id,
+                session_id=session.session_id,
+                last_message_id=latest,
+                summary_until_message_id=cursor,
+                summary=summary,
+            )
+            if snapshot is not None:
+                return snapshot
+        rows = await sessions.messages_after(session.session_id, cursor, until_message_id=latest)
+        return SessionSnapshot(
+            user_id=session.user_id,
+            session_id=session.session_id,
+            last_message_id=latest if latest is not None else (rows[-1].id if rows else cursor),
+            summary=summary,
+            summary_until_message_id=cursor,
+            messages=[ChatMessage(role=row.role, content=row.content) for row in rows],  # type: ignore[arg-type]
+            message_ids=[row.id for row in rows],
+        )
+
+    async def _refresh_session_cache(self, user_id: str, session_id: str) -> None:
+        if not self._session_cache.enabled:
+            return
+        try:
+            # Only committed data is read and cached. Cache failure never turns a
+            # successfully committed answer into an API error.
+            async with self._session_factory() as db:
+                sessions = SessionRepository(db)
+                session = await sessions.check_owner(session_id, user_id)
+                if session is not None:
+                    snapshot = await self._session_snapshot(sessions, session, use_cache=False)
+                    await self._session_cache.set(snapshot)
+        except Exception:
+            logger.warning("session_cache_refresh_failed")
 
     async def _invoke(self, state: AgentState) -> AgentState:
         try:

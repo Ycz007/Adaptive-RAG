@@ -33,6 +33,8 @@ class ToolResult(BaseModel):
     error: str | None = None
     risk: ToolRisk = ToolRisk.READ
     truncated: bool = False
+    result_ref: str | None = None
+    output_chars: int | None = None
 
 
 class PlanStep(BaseModel):

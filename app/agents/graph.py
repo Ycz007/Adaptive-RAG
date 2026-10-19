@@ -16,6 +16,7 @@ from app.agents.nodes.memory import memory_node
 from app.agents.nodes.planner import Planner, planner_node
 from app.agents.nodes.retrieval import retrieval_node
 from app.agents.nodes.router import intent_node, router_node
+from app.agents.nodes.tool_recovery import tool_recovery_node
 from app.agents.state import AgentState
 from app.config.settings import Settings
 from app.core.enums import RetrievalStrategy
@@ -55,7 +56,7 @@ def build_graph(
     rewriter = QueryRewriter(llm)  # 查询改写器
     self_rag = SelfRAGLoop(retriever, reranker, rewriter, llm, settings)  # Self-RAG 自反思检索循环
     planner = Planner(llm, registry, settings=settings)  # 任务规划器
-    checker = FaithfulnessChecker(llm)  # 忠诚度检查器（防幻觉）
+    checker = FaithfulnessChecker(llm, settings=settings)  # 忠诚度检查器（防幻觉）
     summarizer = ConversationSummarizer(llm)  # 对话摘要器
 
     graph = StateGraph(AgentState)
@@ -80,6 +81,10 @@ def build_graph(
     graph.add_node("check_faithfulness", partial(faithfulness_node, checker=checker, llm=llm))
     graph.add_node("compact_memory", partial(memory_node, settings=settings, summarizer=summarizer))
     graph.add_node("prepare_memory", partial(memory_node, settings=settings, summarizer=summarizer))
+    graph.add_node(
+        "recover_tool_results",
+        partial(tool_recovery_node, llm=llm, registry=registry, settings=settings),
+    )
 
     def _after_guardrail(state: AgentState) -> str:
         return "refuse_answer" if state.get("refused") else "prepare_memory"
@@ -105,7 +110,8 @@ def build_graph(
     graph.add_edge("retrieve_docs", "compact_memory")
     graph.add_edge("plan_tasks", "execute_tools")
     graph.add_edge("execute_tools", "compact_memory")
-    graph.add_edge("compact_memory", "generate_answer")
+    graph.add_edge("compact_memory", "recover_tool_results")
+    graph.add_edge("recover_tool_results", "generate_answer")
     graph.add_edge("generate_answer", "check_faithfulness")
     graph.add_edge("refuse_answer", END)
     graph.add_edge("check_faithfulness", END)

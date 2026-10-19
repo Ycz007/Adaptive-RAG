@@ -3,7 +3,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -56,9 +56,8 @@ class Settings(BaseSettings):
     rerank_top_n: int = 5
     max_retrieval_hops: int = 3
 
-    token_budget: int = 128_000
+    token_budget: int = Field(default=128_000, gt=0)
     memory_recent_turns: int = Field(default=8, ge=1)
-    memory_history_token_limit: int = Field(default=12_000, ge=128)
     context_safety_tokens: int = Field(default=512, ge=0)
     compress_soft_ratio: float = 0.50
     compress_hard_ratio: float = 0.70
@@ -69,6 +68,8 @@ class Settings(BaseSettings):
 
     rate_limit_per_minute: int = 60
     retrieval_cache_ttl_seconds: int = 60
+    session_cache_ttl_seconds: int = Field(default=1800, ge=1)
+    session_cache_max_bytes: int = Field(default=2_000_000, ge=1024)
     db_pool_size: int = 5
     db_max_overflow: int = 10
     db_pool_timeout: int = 30
@@ -80,6 +81,18 @@ class Settings(BaseSettings):
     unstructured_force: bool = False
     mcp_enabled: bool = True
     mcp_remote_url: str = ""
+
+    @model_validator(mode="after")
+    def validate_compression_thresholds(self):
+        if (
+            not 0
+            < self.compress_soft_ratio
+            < self.compress_hard_ratio
+            < self.auto_compact_ratio
+            < 1
+        ):
+            raise ValueError("compression thresholds must satisfy 0 < soft < hard < auto < 1")
+        return self
 
     @property
     def llm_configured(self) -> bool:

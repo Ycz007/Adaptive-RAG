@@ -9,6 +9,7 @@ from app.infra.rate_limit import InMemoryRateLimiter, RedisRateLimiter
 from app.infra.redis_client import connect_redis
 from app.mcp.adapter import merge_mcp_tools
 from app.mcp.runtime import LOCAL_CATALOG
+from app.memory.session_cache import RedisSessionContextCache, SessionContextCache
 from app.providers.base import LLMProvider
 from app.providers.deepseek import DeepSeekProvider
 from app.providers.embeddings import build_embedding_provider
@@ -122,6 +123,15 @@ async def build_container(settings: Settings, seed: bool = False) -> AppContaine
         session_factory=session_factory,
         rate_limiter=rate_limiter,
         registry=registry,
+        session_cache=(
+            RedisSessionContextCache(
+                redis,
+                ttl_seconds=settings.session_cache_ttl_seconds,
+                max_bytes=settings.session_cache_max_bytes,
+            )
+            if redis is not None
+            else SessionContextCache()
+        ),
     )
     if seed:
         async with session_factory() as session:

@@ -15,8 +15,10 @@ from app.core.exceptions import (
     ToolPermissionError,
 )
 from app.core.request_scope import get_db_session
+from app.memory.compression import TOOL_HARD_CHARS
 from app.observability.metrics import TOOL_CALLS
 from app.repositories.idempotency import IdempotencyRepository
+from app.repositories.tool_output_repository import ToolOutputRepository
 from app.schemas.agent import PlanStep, ToolResult
 from app.schemas.common import LatencyBreakdown
 from app.tools.base import Tool, ToolContext
@@ -119,7 +121,7 @@ async def executor_node(
     for step in plan.steps:
         if (
             calls >= settings.max_tool_calls
-            or (state.get("step_count") or 0) >= settings.max_agent_steps
+            or (state.get("step_count") or 0) + calls >= settings.max_agent_steps
         ):
             break
         if not step.tool_name:
@@ -166,9 +168,15 @@ async def executor_node(
             )
         calls += 1
     latency = state.get("latency") or LatencyBreakdown()
+    archive = ToolOutputRepository(get_db_session())
+    persisted = []
+    for result in results:
+        if result.name != "load_tool_result" and len(str(result.output)) > TOOL_HARD_CHARS:
+            result = await archive.save(result, context)
+        persisted.append(result)
     latency.tool_ms = (time.perf_counter() - started) * 1000
     return {
-        "tool_results": results,
+        "tool_results": persisted,
         "step_count": (state.get("step_count") or 0) + calls,
         "latency": latency,
     }

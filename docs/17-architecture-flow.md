@@ -98,7 +98,8 @@ flowchart TD
     TOOL_RESULT --> MEMORY
 
     DIRECT --> MEMORY
-    MEMORY --> GENERATE[🎨 生成回答]
+    MEMORY --> RECOVER[📂 按需加载已持久化的工具结果]
+    RECOVER --> GENERATE[🎨 生成回答]
     REFUSE --> OUTPUT
     WAIT --> OUTPUT
     GENERATE --> FAITHFUL{🧪 事实性检查}

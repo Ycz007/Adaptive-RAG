@@ -45,10 +45,13 @@ async def test_short_history_preserves_roles_without_summary_call():
 
 async def test_compaction_summarizes_evicted_turns_and_merges_old_summary():
     context, llm = builder(memory_recent_turns=2)
+    messages = history(5)
+    for message in messages[:6]:
+        message.content += "长" * 1000
     result = await context.build_answer(
         {
             "user_query": "查一下物流",
-            "messages": history(5),
+            "messages": messages,
             "message_ids": list(range(11, 21)),
             "summary": "更早的订单 ORD10001",
             "summary_until_message_id": 10,
@@ -94,8 +97,11 @@ async def test_impossible_current_question_is_rejected_before_model_call():
 
 async def test_failed_summary_does_not_mutate_history_or_cursor():
     llm = FakeLLMProvider({"新增历史": '{"summary":""}'})
-    context = ContextBuilder(Settings(memory_recent_turns=1), ConversationSummarizer(llm))
+    context = ContextBuilder(
+        Settings(token_budget=5000, memory_recent_turns=1), ConversationSummarizer(llm)
+    )
     state = {"user_query": "继续", "messages": history(3), "message_ids": list(range(1, 7))}
+    state["messages"][0].content += "长" * 10000
     with pytest.raises(LLMOutputError):
         await context.build_answer(state)
     assert len(state["messages"]) == 6

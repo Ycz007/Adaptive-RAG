@@ -2,7 +2,7 @@
 
 from typing import Any, TypedDict
 
-from app.core.enums import QueryComplexity, RetrievalStrategy
+from app.core.enums import CompressionLevel, QueryComplexity, RetrievalStrategy
 from app.schemas.agent import AgentPlan, ComplexityResult, IntentResult, ToolResult
 from app.schemas.chat import ActionProposal, ChatMessage
 from app.schemas.common import LatencyBreakdown, TokenUsage
@@ -21,6 +21,13 @@ class AgentState(TypedDict, total=False):
     user_id: str
     user_query: str
     messages: list[ChatMessage]
+    context_messages: list[ChatMessage]
+    compression_level: CompressionLevel
+    context_tokens_before: int
+    context_tokens_after: int
+    context_evidence: str
+    context_tool_results: str
+    tool_result_refs: list[dict[str, Any]]
     message_ids: list[int]
     summary: str
     summary_until_message_id: int

@@ -23,6 +23,7 @@ from app.tools.product_tools import (
     SearchProductsTool,
 )
 from app.tools.registry import ToolRegistry
+from app.tools.tool_result_tools import LoadToolResultTool
 
 
 def build_tool_registry(retriever: HybridRetriever) -> ToolRegistry:
@@ -46,6 +47,7 @@ def build_tool_registry(retriever: HybridRetriever) -> ToolRegistry:
         GetWarrantyTool(),
         SearchKnowledgeTool(retriever),
         EscalateToHumanTool(),
+        LoadToolResultTool(),
     ]
     for tool in tools:
         registry.register(tool)

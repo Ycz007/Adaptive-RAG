@@ -12,8 +12,8 @@ logger = logging.getLogger(__name__)
 async def connect_redis(settings: Settings):
     """Return an async Redis client or None.
 
-    Redis is used for rate limiting, short-TTL retrieval cache, and optional
-    distributed idempotency. Chat must still work when Redis is down.
+    Redis is used for rate limiting, retrieval cache and versioned conversation
+    snapshots. Chat must still work when Redis is down.
     """
     if not settings.redis_configured:
         return None

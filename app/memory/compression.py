@@ -1,8 +1,8 @@
 """Progressive context compression.
 
 50–70% budget: truncate bulky tool payloads.
-70–85%: shrink older turns to bullets.
->85%: auto-compact — keep last K turns + a running summary.
+70–85%: shrink the visible sliding window.
+>=85%: auto-compact — keep recent turns + a running summary.
 """
 
 from __future__ import annotations
@@ -23,7 +23,7 @@ def compress_tool_results(
     level: CompressionLevel,
 ) -> list[ToolResult]:
     limit = {
-        CompressionLevel.NONE: 10_000,
+        CompressionLevel.NONE: float("inf"),
         CompressionLevel.SOFT_TRUNCATE: TOOL_SOFT_CHARS,
         CompressionLevel.HARD_COMPRESS: TOOL_HARD_CHARS,
         CompressionLevel.AUTO_COMPACT: TOOL_HARD_CHARS,
@@ -31,9 +31,22 @@ def compress_tool_results(
     compressed: list[ToolResult] = []
     for result in results:
         cloned = result.model_copy(deep=True)
+        # Recovery pages are already bounded by the loader; re-truncating them
+        # would make the missing tail impossible to recover.
+        if cloned.name == "load_tool_result":
+            compressed.append(cloned)
+            continue
         text = str(cloned.output)
         if len(text) > limit:
-            cloned.output = {"truncated": True, "preview": text[:limit]}
+            cloned.output = {"truncated": True, "preview": text[: int(limit)]}
+            if cloned.result_ref:
+                cloned.output.update(
+                    {
+                        "result_ref": cloned.result_ref,
+                        "total_chars": cloned.output_chars,
+                        "load_tool": "load_tool_result",
+                    }
+                )
             cloned.truncated = True
         compressed.append(cloned)
     return compressed

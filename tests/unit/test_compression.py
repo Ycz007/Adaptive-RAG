@@ -24,7 +24,7 @@ def test_soft_truncate_shrinks_tool_payload() -> None:
 
 
 def test_auto_compact_keeps_recent_messages() -> None:
-    settings = Settings(token_budget=50, auto_compact_ratio=0.01)
+    settings = Settings(token_budget=50)
     messages = [ChatMessage(role="user", content=f"turn {i} " * 20) for i in range(12)]
     window, _, level, _ = apply_compression(messages, [], "摘要", settings)
     assert level == CompressionLevel.AUTO_COMPACT

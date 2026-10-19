@@ -1,6 +1,6 @@
 """Conversation session and message persistence."""
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.exceptions import ToolPermissionError
@@ -27,13 +27,22 @@ class SessionRepository:
             raise ToolPermissionError("session not found or access denied")
         return row
 
-    async def messages_after(self, session_id: str, message_id: int) -> list[MessageRow]:
-        result = await self._session.execute(
-            select(MessageRow)
-            .where(MessageRow.session_id == session_id, MessageRow.id > message_id)
-            .order_by(MessageRow.id)
+    async def messages_after(
+        self, session_id: str, message_id: int, *, until_message_id: int | None = None
+    ) -> list[MessageRow]:
+        query = select(MessageRow).where(
+            MessageRow.session_id == session_id, MessageRow.id > message_id
         )
+        if until_message_id is not None:
+            query = query.where(MessageRow.id <= until_message_id)
+        result = await self._session.execute(query.order_by(MessageRow.id))
         return list(result.scalars().all())
+
+    async def latest_message_id(self, session_id: str) -> int:
+        value = await self._session.scalar(
+            select(func.max(MessageRow.id)).where(MessageRow.session_id == session_id)
+        )
+        return value or 0
 
     async def recent_messages(self, session_id: str, *, limit: int = 20) -> list[ChatMessage]:
         result = await self._session.execute(

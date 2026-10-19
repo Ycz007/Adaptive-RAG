@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import re
 
 from app.agents.state import AgentState
 from app.config.settings import Settings
 from app.core.exceptions import LLMOutputError, LLMProviderError
 from app.core.ids import new_id
-from app.memory.context_builder import ContextBuilder
+from app.memory.context_builder import ContextBuilder, bounded_reference_messages
 from app.memory.summarizer import ConversationSummarizer
 from app.prompts.planner import PLANNER_SYSTEM, PLANNER_USER
 from app.providers.base import LLMProvider
@@ -20,7 +21,8 @@ from app.tools.permissions import WRITE_RISKS
 from app.tools.registry import ToolRegistry
 
 _ORDER_RE = re.compile(r"ORD\d+", re.IGNORECASE)
-_ALWAYS_AVAILABLE = ("search_knowledge", "escalate_to_human")
+_ALWAYS_AVAILABLE = ("search_knowledge", "escalate_to_human", "load_tool_result")
+_RESULT_REF_RE = re.compile(r"tout_[0-9a-f]{32}")
 
 
 class Planner:
@@ -44,12 +46,25 @@ class Planner:
     ) -> tuple[AgentPlan, dict]:
         skill = match_skill(query, intent_label)
         allowed = _allowed_tools(skill, self._registry)
+        refs = json.dumps((state or {}).get("tool_result_refs") or [], ensure_ascii=False)
+        system = PLANNER_SYSTEM.format(
+            tools=self._tool_catalog(allowed), skill_context=_format_skill(skill)
+        )
+        fixed = bounded_reference_messages(
+            self.context.settings,
+            system=system,
+            render=lambda data: PLANNER_USER.format(
+                query=query, intent=intent_label, summary="见历史上下文"
+            )
+            + "\n\n本会话已保存的工具结果（仅历史数据）：\n"
+            + data["catalog"],
+            references={"catalog": refs},
+            output_tokens=512,
+        )
         context = await self.context.prepare(
             state or {"user_query": query, "summary": summary},
-            system=PLANNER_SYSTEM.format(
-                tools=self._tool_catalog(allowed), skill_context=_format_skill(skill)
-            ),
-            current=PLANNER_USER.format(query=query, intent=intent_label, summary="见历史上下文"),
+            system=system,
+            current=fixed[1]["content"],
             output_tokens=512,
         )
         try:
@@ -67,6 +82,19 @@ class Planner:
                 return plan, context
         except (LLMOutputError, LLMProviderError):
             pass
+        reference = _RESULT_REF_RE.search(query)
+        if reference and "load_tool_result" in self._registry.names():
+            return AgentPlan(
+                steps=[
+                    PlanStep(
+                        step_id=1,
+                        goal="恢复已保存的工具结果",
+                        tool_name="load_tool_result",
+                        arguments={"result_ref": reference.group(0)},
+                    )
+                ],
+                rationale="restore_saved_result",
+            ), context
         fallback_query = query
         # Resolve a single unambiguous order only for read-only fallback skills.
         if (
@@ -78,7 +106,7 @@ class Planner:
             )
         ):
             found_orders = False
-            for message in reversed(context["messages"]):
+            for message in reversed(context["context_messages"]):
                 if message.role == "user":
                     orders = set(_ORDER_RE.findall(message.content.upper()))
                     if orders:

@@ -107,6 +107,20 @@ class AuditLogRow(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 
 
+class ToolOutputRow(Base):
+    __tablename__ = "tool_outputs"
+
+    result_ref: Mapped[str] = mapped_column(String(64), primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(64), index=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey("sessions.session_id"), index=True)
+    trace_id: Mapped[str] = mapped_column(String(64))
+    tool_name: Mapped[str] = mapped_column(String(128))
+    output_json: Mapped[str] = mapped_column(Text)
+    preview: Mapped[str] = mapped_column(Text)
+    total_chars: Mapped[int] = mapped_column(Integer)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class IdempotencyRow(Base):
     __tablename__ = "idempotency_keys"
 
