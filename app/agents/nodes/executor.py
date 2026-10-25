@@ -19,7 +19,7 @@ from app.memory.compression import TOOL_HARD_CHARS
 from app.observability.metrics import TOOL_CALLS
 from app.repositories.idempotency import IdempotencyRepository
 from app.repositories.tool_output_repository import ToolOutputRepository
-from app.schemas.agent import PlanStep, ToolResult
+from app.schemas.agent import PlanStep, ToolCall, ToolResult
 from app.schemas.common import LatencyBreakdown
 from app.tools.base import Tool, ToolContext
 from app.tools.permissions import WRITE_RISKS, assert_permitted
@@ -99,6 +99,7 @@ async def executor_node(
     *,
     registry: ToolRegistry,
     settings: Settings,
+    allow_fallback: bool = True,
 ) -> dict:
     plan = state.get("plan")
     if plan is None:
@@ -106,6 +107,28 @@ async def executor_node(
     if state.get("pending_action") and not state.get("confirm_action_id"):
         return {"tool_results": []}
 
+    return await execute_calls(
+        state,
+        calls_to_run=[
+            ToolCall(name=step.tool_name, arguments=step.arguments)
+            for step in plan.steps
+            if step.tool_name
+        ],
+        registry=registry,
+        settings=settings,
+        allow_fallback=allow_fallback,
+    )
+
+
+async def execute_calls(
+    state: AgentState,
+    *,
+    calls_to_run: list[ToolCall],
+    registry: ToolRegistry,
+    settings: Settings,
+    allow_fallback: bool = False,
+) -> dict:
+    """Shared execution safeguards; the loop passes exactly one model-selected call."""
     started = time.perf_counter()
     results: list[ToolResult] = []
     context = ToolContext(
@@ -118,22 +141,19 @@ async def executor_node(
     idempotency = IdempotencyRepository(get_db_session())
     calls = 0
     query = state["user_query"]
-    for step in plan.steps:
-        if (
-            calls >= settings.max_tool_calls
-            or (state.get("step_count") or 0) + calls >= settings.max_agent_steps
-        ):
+    for call in calls_to_run:
+        if (state.get("step_count") or 0) + calls >= settings.max_tool_calls or (
+            state.get("step_count") or 0
+        ) + calls >= settings.max_agent_steps:
             break
-        if not step.tool_name:
-            continue
-        tool = registry.get(step.tool_name)
+        tool = registry.get(call.name)
         confirmed = bool(state.get("confirm_action_id"))
         try:
             if tool.risk in WRITE_RISKS:
                 assert_permitted(tool, confirmed=confirmed)
                 idem_key = context.confirmed_action_id or context.idempotency_key
                 if idem_key:
-                    fp = _fingerprint(tool.name, step.arguments)
+                    fp = _fingerprint(tool.name, call.arguments)
                     existing = await idempotency.get_if_matches(idem_key, fp)
                     if existing is not None:
                         results.append(
@@ -144,14 +164,32 @@ async def executor_node(
                         TOOL_CALLS.labels(tool=tool.name, status="idempotent").inc()
                         calls += 1
                         continue
-                    result = await tool.run(step.arguments, context)
-                    await idempotency.put(idem_key, fp, result.output)
-                    TOOL_CALLS.labels(tool=tool.name, status="ok").inc()
+                    result = await tool.run(call.arguments, context)
+                    if result.success:
+                        await idempotency.put(idem_key, fp, result.output)
+                    TOOL_CALLS.labels(
+                        tool=tool.name, status="ok" if result.success else "error"
+                    ).inc()
                     results.append(result)
                     calls += 1
                     continue
-            result = await execute_with_fallback(tool, step, context, registry, query)
-            TOOL_CALLS.labels(tool=tool.name, status="ok").inc()
+            result = (
+                await execute_with_fallback(
+                    tool,
+                    PlanStep(
+                        step_id=1,
+                        goal="read fallback",
+                        tool_name=call.name,
+                        arguments=call.arguments,
+                    ),
+                    context,
+                    registry,
+                    query,
+                )
+                if allow_fallback
+                else await tool.run(call.arguments, context)
+            )
+            TOOL_CALLS.labels(tool=tool.name, status="ok" if result.success else "error").inc()
             results.append(result)
         except ToolPermissionError as exc:
             TOOL_CALLS.labels(tool=tool.name, status="denied").inc()
@@ -174,7 +212,7 @@ async def executor_node(
         if result.name != "load_tool_result" and len(str(result.output)) > TOOL_HARD_CHARS:
             result = await archive.save(result, context)
         persisted.append(result)
-    latency.tool_ms = (time.perf_counter() - started) * 1000
+    latency.tool_ms += (time.perf_counter() - started) * 1000
     return {
         "tool_results": persisted,
         "step_count": (state.get("step_count") or 0) + calls,

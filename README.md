@@ -64,7 +64,7 @@
 | `DIRECT` | 问候、闲聊等无需知识 | 不检索，直接生成 |
 | `SINGLE` | 单跳政策问题 | 一次 Hybrid 检索，融合后精排 |
 | `MULTI` | 多约束、需交叉验证 | 查询改写 + 多路检索 + Self-RAG 自纠错 |
-| `AGENT` | 需要业务动作或实时数据 | Planner 规划 → 工具执行（带权限与幂等） |
+| `AGENT` | 需要业务动作或实时数据 | Agent Loop：逐轮决策 → 单工具执行 → 观察 → 再决策（带权限与幂等） |
 | `REFUSE` | 越权、注入、证据不足 | 明确拒答或转人工 |
 
 把它收敛成枚举的直接收益是：路由逻辑可以脱离 LLM 单独做单元测试，策略可以透出到 API 响应，指标可以按策略分桶。如果这段逻辑写成一个大 `if query:` 分支，失败路径既测不了也讲不清。
@@ -86,12 +86,15 @@ flowchart TD
     R -->|"需业务动作"| A["AGENT 工具"]
     S --> HY["Hybrid 检索<br/>BM25 + 向量 → RRF 融合 → Cross-Encoder 精排"]
     M --> HY
-    A --> EX["工具执行<br/>权限 / 幂等 / HITL"]
+    A --> DEC["模型决策：调用一个工具或结束"]
+    DEC -->|"调用"| EX["单工具执行<br/>权限 / 幂等 / HITL"]
+    EX -->|"观察结果"| DEC
+    DEC -->|"结束 / 上限 / 等待确认"| MEM
     D --> MEM["调用前组装历史、摘要、证据和工具结果，检查预算"]
     HY --> MEM
-    EX --> MEM
     MEM --> REC["按需加载已持久化的工具结果"]
-    REC --> GEN["生成"]
+    MEM -->|"Agent 已在循环中恢复原文"| GEN["生成"]
+    REC --> GEN
     GEN --> FA{"忠实度检查"}
     FA -->|"有依据"| OUT([回答 + citations])
     FA -->|"无依据"| SC["自纠错重试"]
@@ -106,7 +109,7 @@ flowchart TD
 HTTP → ChatService → LangGraph → Retriever 或 Tool → Provider / DB
 ```
 
-Graph 一共 12 个节点（`app/agents/graph.py`）：`apply_guardrail`、`prepare_memory`、`classify_intent`、`route_complexity`、`retrieve_docs`、`plan_tasks`、`execute_tools`、`compact_memory`、`recover_tool_results`、`generate_answer`、`refuse_answer`、`check_faithfulness`。上下文预算、工具结果恢复、数据库迁移和行为边界见[会话上下文管理](docs/18-conversation-memory.md)。完整的分层说明、启动降级链路与检索降级链路见[架构图与运行流程](docs/17-architecture-flow.md)。
+Graph 一共 12 个节点（`app/agents/graph.py`）：`apply_guardrail`、`prepare_memory`、`classify_intent`、`route_complexity`、`retrieve_docs`、`agent_decide`、`agent_act`、`compact_memory`、`recover_tool_results`、`generate_answer`、`refuse_answer`、`check_faithfulness`。上下文预算、工具结果恢复、数据库迁移和行为边界见[会话上下文管理](docs/18-conversation-memory.md)。Agent 分支实现见 [Agent Loop](docs/20-agent-loop.md)。完整的分层说明、启动降级链路与检索降级链路见[架构图与运行流程](docs/17-architecture-flow.md)。
 
 ## 快速开始
 

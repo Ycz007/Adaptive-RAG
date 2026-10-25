@@ -48,6 +48,15 @@ class AgentState(TypedDict, total=False):
     refused: bool
     error: str | None
     step_count: int
+    agent_iterations: int
+    agent_done: bool
+    agent_feedback: str
+    agent_stop_reason: str
+    agent_tool_name: str | None
+    agent_tool_arguments: dict[str, Any]
+    agent_calls: list[dict[str, Any]]
+    agent_call_fingerprints: list[str]
+    agent_write_attempted: bool
     token_usage: TokenUsage
     latency: LatencyBreakdown
     extra: dict[str, Any]

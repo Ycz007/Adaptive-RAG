@@ -7,13 +7,12 @@ from functools import partial
 from langgraph.graph import END, START, StateGraph
 from langgraph.graph.state import CompiledStateGraph
 
-from app.agents.nodes.executor import executor_node
+from app.agents.nodes.agent_loop import agent_act_node, agent_decide_node
 from app.agents.nodes.faithfulness import faithfulness_node
 from app.agents.nodes.generate import generate_node, refuse_node
 from app.agents.nodes.guardrail import guardrail_node
 from app.agents.nodes.intent import IntentClassifier
 from app.agents.nodes.memory import memory_node
-from app.agents.nodes.planner import Planner, planner_node
 from app.agents.nodes.retrieval import retrieval_node
 from app.agents.nodes.router import intent_node, router_node
 from app.agents.nodes.tool_recovery import tool_recovery_node
@@ -38,7 +37,7 @@ def _route_after_complexity(state: AgentState) -> str:
         RetrievalStrategy.REFUSE: "refuse_answer",
         RetrievalStrategy.SINGLE: "retrieve_docs",
         RetrievalStrategy.MULTI: "retrieve_docs",
-        RetrievalStrategy.AGENT: "plan_tasks",
+        RetrievalStrategy.AGENT: "agent_decide",
     }
     return mapping[strategy]
 
@@ -55,7 +54,6 @@ def build_graph(
     adaptive = AdaptiveRouter(llm)  # 自适应路由器（判断复杂度）
     rewriter = QueryRewriter(llm)  # 查询改写器
     self_rag = SelfRAGLoop(retriever, reranker, rewriter, llm, settings)  # Self-RAG 自反思检索循环
-    planner = Planner(llm, registry, settings=settings)  # 任务规划器
     checker = FaithfulnessChecker(llm, settings=settings)  # 忠诚度检查器（防幻觉）
     summarizer = ConversationSummarizer(llm)  # 对话摘要器
 
@@ -74,8 +72,10 @@ def build_graph(
             settings=settings,
         ),
     )
-    graph.add_node("plan_tasks", partial(planner_node, planner=planner))
-    graph.add_node("execute_tools", partial(executor_node, registry=registry, settings=settings))
+    graph.add_node(
+        "agent_decide", partial(agent_decide_node, llm=llm, registry=registry, settings=settings)
+    )
+    graph.add_node("agent_act", partial(agent_act_node, registry=registry, settings=settings))
     graph.add_node("generate_answer", partial(generate_node, llm=llm))
     graph.add_node("refuse_answer", refuse_node)
     graph.add_node("check_faithfulness", partial(faithfulness_node, checker=checker, llm=llm))
@@ -104,15 +104,36 @@ def build_graph(
             "compact_memory": "compact_memory",
             "refuse_answer": "refuse_answer",
             "retrieve_docs": "retrieve_docs",
-            "plan_tasks": "plan_tasks",
+            "agent_decide": "agent_decide",
         },
     )
     graph.add_edge("retrieve_docs", "compact_memory")
-    graph.add_edge("plan_tasks", "execute_tools")
-    graph.add_edge("execute_tools", "compact_memory")
-    graph.add_edge("compact_memory", "recover_tool_results")
+    graph.add_conditional_edges(
+        "agent_decide",
+        lambda state: (
+            "compact_memory"
+            if state.get("agent_done")
+            else "agent_act"
+            if state.get("agent_tool_name")
+            else "agent_decide"
+        ),
+        {
+            "compact_memory": "compact_memory",
+            "agent_act": "agent_act",
+            "agent_decide": "agent_decide",
+        },
+    )
+    graph.add_edge("agent_act", "agent_decide")
+    graph.add_conditional_edges(
+        "compact_memory",
+        lambda state: "generate_answer"
+        if state.get("strategy") == RetrievalStrategy.AGENT
+        else "recover_tool_results",
+        {"generate_answer": "generate_answer", "recover_tool_results": "recover_tool_results"},
+    )
     graph.add_edge("recover_tool_results", "generate_answer")
     graph.add_edge("generate_answer", "check_faithfulness")
     graph.add_edge("refuse_answer", END)
     graph.add_edge("check_faithfulness", END)
-    return graph.compile()
+    # Includes routing, all decision/action rounds, final generation and checking.
+    return graph.compile().with_config(recursion_limit=2 * settings.max_agent_steps + 16)

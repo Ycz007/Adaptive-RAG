@@ -1,3 +1,5 @@
+> 当前线上调用链已改为逐轮决策的 Agent Loop，详见 [Agent Loop](20-agent-loop.md)。本文中 Planner / 多步计划的示例描述保留的兼容代码，主图不再调用规划节点。
+
 # 05 · 智能体、工具与 HITL
 
 > 一句话：意图 LLM + 覆盖层；Skill 按需收缩工具目录；写操作 HITL + 幂等；读失败换工具；MCP 与本地工具同一套 Function Calling。

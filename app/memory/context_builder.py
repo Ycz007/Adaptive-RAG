@@ -149,19 +149,32 @@ class ContextBuilder:
             "context_tokens_after": prompt_tokens(packed) + reserve,
         }
 
-    async def build_answer(self, state: AgentState) -> dict:
+    async def build_answer(
+        self,
+        state: AgentState,
+        *,
+        system: str = ANSWER_SYSTEM,
+        render_current: Callable[[str, str], str] | None = None,
+        output_tokens: int = 700,
+    ) -> dict:
         chunks = state.get("retrieved_chunks") or []
         tools = state.get("tool_results") or []
         intent = state.get("intent")
         strategy = state.get("strategy")
 
         def render(evidence: str, tool_text: str) -> str:
+            if render_current is not None:
+                return render_current(evidence, tool_text)
             return ANSWER_USER.format(
                 query=state["user_query"],
                 intent=intent.label.value if intent else "unknown",
                 strategy=strategy.value if strategy else "direct",
                 evidence=evidence or "(无检索结果)",
                 tool_results=tool_text or "(无)",
+            ) + (
+                "\nAgent 停止原因（不得声称尚未完成的操作已完成）：" + state["agent_stop_reason"]
+                if state.get("agent_stop_reason")
+                else ""
             )
 
         evidence = "\n\n".join(f"[{c.chunk_id}] {c.title}\n{c.content}" for c in chunks[:6])
@@ -170,11 +183,11 @@ class ContextBuilder:
             if tools
             else ""
         )
-        reserve = 700 + self.settings.context_safety_tokens
+        reserve = output_tokens + self.settings.context_safety_tokens
         before = (
             prompt_tokens(
                 [
-                    {"role": "system", "content": ANSWER_SYSTEM},
+                    {"role": "system", "content": system},
                     *history_messages(state.get("summary") or "", state.get("messages") or []),
                     {"role": "user", "content": render(evidence, raw_tools)},
                 ]
@@ -194,7 +207,7 @@ class ContextBuilder:
         input_limit = self.settings.token_budget - reserve
         base = prompt_tokens(
             [
-                {"role": "system", "content": ANSWER_SYSTEM},
+                {"role": "system", "content": system},
                 {"role": "user", "content": render("", tool_text)},
             ]
         )
@@ -205,7 +218,7 @@ class ContextBuilder:
             )
             base = prompt_tokens(
                 [
-                    {"role": "system", "content": ANSWER_SYSTEM},
+                    {"role": "system", "content": system},
                     {"role": "user", "content": render("", tool_text)},
                 ]
             )
@@ -214,9 +227,9 @@ class ContextBuilder:
         evidence = _clip(evidence, max(0, input_limit - base - memory_room))
         prepared = await self.prepare(
             state,
-            system=ANSWER_SYSTEM,
+            system=system,
             current=render(evidence, tool_text),
-            output_tokens=700,
+            output_tokens=output_tokens,
             level=level,
             tokens_before=before,
         )

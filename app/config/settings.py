@@ -63,8 +63,8 @@ class Settings(BaseSettings):
     compress_hard_ratio: float = 0.70
     auto_compact_ratio: float = 0.85
 
-    max_agent_steps: int = 8
-    max_tool_calls: int = 6
+    max_agent_steps: int = Field(default=8, ge=1, le=100)
+    max_tool_calls: int = Field(default=6, ge=1, le=100)
 
     rate_limit_per_minute: int = 60
     retrieval_cache_ttl_seconds: int = 60

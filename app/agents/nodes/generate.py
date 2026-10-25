@@ -63,7 +63,7 @@ async def generate_node(state: AgentState, llm: LLMProvider) -> dict:
         if chunk.chunk_id in set(payload.citation_chunk_ids)
     ]
     latency = state.get("latency") or LatencyBreakdown()
-    latency.llm_ms = (time.perf_counter() - started) * 1000
+    latency.llm_ms += (time.perf_counter() - started) * 1000
     prev_usage = state.get("token_usage") or TokenUsage()
     merged = TokenUsage(
         prompt_tokens=prev_usage.prompt_tokens + usage.prompt_tokens,

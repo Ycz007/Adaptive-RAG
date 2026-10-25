@@ -5,9 +5,9 @@
 ## 请求流程
 
 1. `ChatService._initial_state()` 先在数据库校验会话归属和消息版本，再查询 Redis 快照；未命中、损坏或 Redis 故障时读取数据库原文。
-2. 护栏通过后，`prepare_memory` 按预算利用率执行三级压缩；有工具调用时，规划器也收到摘要和原始角色的可见历史消息。
+2. 护栏通过后，`prepare_memory` 按预算利用率执行三级压缩；进入 Agent 分支后，每轮决策都收到摘要、原始角色的可见历史消息、工具参数 Schema 和本轮观察，并重新检查预算。
 3. 检索或工具执行结束后，`compact_memory` 使用 `ContextBuilder` 重新组装回答输入，将系统提示、当前问题、历史、摘要、证据和工具输出一起计入预算，预留 700 tokens 回答及安全余量。
-4. `recover_tool_results` 允许 Agent 在本轮对被截断结果按需加载原文页，加载后重新计算预算。`generate_answer` 使用已构建的消息调用模型，随后执行忠实度检查。检查和自纠错收到相同的可见历史、摘要及已压缩的证据/工具输出，并分别执行输入预算检查，避免后续节点重新塞入原始大输出。
+4. Agent 在 `agent_decide → agent_act → agent_decide` 循环中自行选择 `load_tool_result` 恢复原文页；非 Agent 路径保留 `recover_tool_results` 的单批恢复逻辑。加载后重新计算预算。`generate_answer` 使用已构建的消息调用模型，随后执行忠实度检查。检查和自纠错收到相同的可见历史、摘要及已压缩的证据/工具输出，并分别执行输入预算检查，避免后续节点重新塞入原始大输出。
 5. 最终的用户消息、助手消息、摘要和覆盖游标在同一事务中提交。提交成功后，从数据库读取已提交快照并写入 Redis；数据库原始消息不会因压缩被删除。
 
 ## 128k 预算与三级压缩
@@ -79,9 +79,9 @@ Key 为 `chat:context:v1:` 加身份和数据库版本元数据的 SHA-256。版
 
 `offset` / `limit` 按 JSON 原文字符计算，`limit` 默认 1000、最大 4000。返回 `content`、`offset`、`next_offset`、`has_more`、`total_chars` 等信息。按 `next_offset` 加载并拼接全部页面后，可以解析出原始完整工具消息。引用不存在、用户不符或会话不符时均返回相同的未找到结果，不接受任意文件路径。
 
-同轮恢复：新增 `recover_tool_results` 节点，只在结果被截断且有引用时询问模型是否需要加载。仅允许加载本轮已知引用、去重重复页面，并与原业务工具共享 `MAX_TOOL_CALLS` / `MAX_AGENT_STEPS` 限额；预览足够时不加载，不重新执行业务工具。
+同轮恢复：Agent Loop 根据截断预览，自行调用 `load_tool_result`，观察 `has_more` / `next_offset` 后决定是否继续加载。页面与业务工具共享总调用上限，重复调用会被拦截，每次模型决策都计入决策轮数。引用最终由数据库校验当前用户和会话归属。Agent 结束后不再额外执行恢复节点；非 Agent 路径保留 `recover_tool_results` 的单批恢复逻辑。
 
-跨轮恢复：每轮初始化读取本会话最近 10 条结果的轻量目录，供规划器选择 `load_tool_result`；只读取元数据和预览，不自动把大原文放回上下文。明确给出 `tout_...` 的恢复请求会进入工具路径，引用仍需经过数据库权限检查。重启后仍可加载已经提交的记录。
+跨轮恢复：每轮初始化读取本会话最近 10 条结果的轻量目录，供 Agent Loop 选择 `load_tool_result`；只读取元数据和预览，不自动把大原文放回上下文。明确给出 `tout_...` 的恢复请求会进入工具路径，引用仍需经过数据库权限检查。重启后仍可加载已经提交的记录。
 
 新建表由应用启动时的 ORM 建表流程创建；使用 Alembic 管理的部署需应用 `0004_tool_outputs` 迁移。当前不自动清理这些记录，保留周期需要按部署的数据保留策略另行设置。
 
@@ -90,3 +90,5 @@ Key 为 `chat:context:v1:` 加身份和数据库版本元数据的 SHA-256。版
 `tests/unit/test_compression_thresholds.py` 验证三个阈值的前一 token、等于阈值、后一 token 和 70% 到 85% 的历史完整性；`test_context_builder.py` 验证预算与摘要失败；`test_session_cache.py` 验证缓存过期、损坏和版本隔离。`tests/integration/test_conversation_memory.py` 覆盖真实图节点的三级触发、普通/SSE 会话缓存读写、消息正文查询跳过、数据库版本变化、回滚、Redis 故障、会话隔离和数据库升级。
 
 会话归属检查使用当前 API 提交的 `user_id`，与现有订单接口的身份方式一致；它不替代登录认证。版本 Key 解决缓存陈旧写入问题，同一会话并发生成及摘要更新的数据库协调仍需另行处理。
+
+Agent Loop 的决策协议、退出条件和执行边界见 [Agent Loop](20-agent-loop.md)。

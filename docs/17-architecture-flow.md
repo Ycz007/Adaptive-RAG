@@ -67,7 +67,7 @@ flowchart TD
     COMPLEXITY --> ROUTER[🎯 Adaptive Router]
     ROUTER -->|Direct| DIRECT[⚡ 直接生成]
     ROUTER -->|Single / Multi| RETRIEVE[🔍 检索知识]
-    ROUTER -->|Agent| PLAN[📋 规划工具任务]
+    ROUTER -->|Agent| PLAN[🧠 Agent 下一步决策]
     ROUTER -->|Refuse| REFUSE
 
     RETRIEVE --> STRATEGY{选择检索策略}
@@ -85,20 +85,22 @@ flowchart TD
     LEXICAL --> CONTEXT
     CONTEXT --> MEMORY[🧠 调用前统一上下文预算]
 
-    PLAN --> TOOL_CHECK[🔧 工具注册表和参数校验]
+    PLAN -->|调用一个工具| TOOL_CHECK[🔧 工具注册表和参数校验]
     TOOL_CHECK -->|查询工具| READ_TOOL[🔎 执行只读工具]
     TOOL_CHECK -->|写操作| RISK[⚠️ 风险等级判断]
     RISK -->|低风险 / 已授权| IDEMPOTENCY[🔑 幂等检查]
     RISK -->|高风险| CONFIRM[⏸️ 返回 pending_action 等待确认]
-    CONFIRM -->|确认 token 无效| WAIT[❌ 拒绝执行]
-    CONFIRM -->|确认 token 有效| IDEMPOTENCY
+    CONFIRM -.->|下一次请求带确认标识，重新进入 Agent| PLAN
     IDEMPOTENCY --> EXECUTE[⚙️ 执行业务工具]
     READ_TOOL --> TOOL_RESULT[📦 ToolResult]
     EXECUTE --> TOOL_RESULT
-    TOOL_RESULT --> MEMORY
+    TOOL_RESULT -->|观察结果后继续决策| PLAN
+    PLAN -->|finish / 上限| MEMORY
+    CONFIRM --> MEMORY
 
     DIRECT --> MEMORY
-    MEMORY --> RECOVER[📂 按需加载已持久化的工具结果]
+    MEMORY -->|Agent 已在循环中恢复原文| GENERATE
+    MEMORY -->|非 Agent| RECOVER[📂 按需加载已持久化的工具结果]
     RECOVER --> GENERATE[🎨 生成回答]
     REFUSE --> OUTPUT
     WAIT --> OUTPUT
@@ -175,7 +177,7 @@ flowchart TD
     D -->|否，复杂度 < 0.4| DIRECT[Direct：直接回答]
     D -->|是，复杂度 0.4 - 0.7| SINGLE[Single：一次 Hybrid 检索]
     D -->|是，复杂度 > 0.7| MULTI[Multi：查询改写 + 多路检索]
-    D -->|需要业务动作| AGENT[Agent：Planner + Executor]
+    D -->|需要业务动作| AGENT[Agent Loop：决策 / 执行 / 观察 / 再决策]
 
     DIRECT --> CHECK[事实性和安全检查]
     SINGLE --> CHECK
